@@ -24,6 +24,15 @@ type Ad = {
   created_at: string;
 };
 
+type Advertiser = {
+  id: string;
+  name: string;
+  total_ads: number;
+  total_domains: number;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+};
+
 function extractDomain(adText: string): string | null {
   const match = adText.match(/Domain:\s*(.+)/);
   return match?.[1] ?? null;
@@ -41,37 +50,50 @@ function extractCleanCopy(adText: string): string {
 }
 
 export default async function Home() {
-  const [{ data: products, error: productsError }, { data: ads, error: adsError }] =
-    await Promise.all([
-      supabase
-        .from("products")
-        .select("*")
-        .order("winning_score", { ascending: false })
-        .limit(5),
+  const [
+    { data: products, error: productsError },
+    { data: ads, error: adsError },
+    { data: advertisers, error: advertisersError },
+  ] = await Promise.all([
+    supabase
+      .from("products")
+      .select("*")
+      .order("winning_score", { ascending: false })
+      .limit(5),
 
-      supabase
-        .from("ads")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(20),
-    ]);
+    supabase
+      .from("ads")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(20),
 
-  if (productsError || adsError) {
+    supabase
+      .from("advertisers")
+      .select("*")
+      .order("total_ads", { ascending: false })
+      .limit(10),
+  ]);
+
+  if (productsError || adsError || advertisersError) {
     return (
       <main className="min-h-screen bg-slate-950 p-8 text-white">
         <h1 className="text-2xl font-bold">Trend Radar</h1>
         <p className="mt-4 text-red-400">
-          Error cargando datos: {productsError?.message ?? adsError?.message}
+          Error cargando datos:{" "}
+          {productsError?.message ??
+            adsError?.message ??
+            advertisersError?.message}
         </p>
       </main>
     );
   }
 
   const totalAds = ads?.length ?? 0;
-  const totalAdvertisers = new Set(
-    ads?.map((ad) => ad.advertiser_name).filter(Boolean)
-  ).size;
-  const totalKeywords = new Set(ads?.map((ad) => ad.keyword).filter(Boolean)).size;
+  const totalAdvertisers = advertisers?.length ?? 0;
+  const totalKeywords = new Set(ads?.map((ad) => ad.keyword).filter(Boolean))
+    .size;
+
+  const topAdvertisers = advertisers as Advertiser[] | null;
 
   return (
     <main className="min-h-screen bg-slate-950 p-6 text-white">
@@ -105,14 +127,48 @@ export default async function Home() {
         </section>
 
         <section className="mb-10">
-          <div className="mb-4 flex items-end justify-between gap-4">
-            <div>
-              <h2 className="text-2xl font-semibold">Productos ganadores</h2>
-              <p className="mt-1 text-sm text-slate-400">
-                Por ahora estos datos son manuales; luego serán calculados desde
-                los anuncios detectados.
-              </p>
-            </div>
+          <div className="mb-4">
+            <h2 className="text-2xl font-semibold">Top Advertisers</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              Anunciantes con más anuncios detectados.
+            </p>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            {topAdvertisers?.map((advertiser, index) => (
+              <article
+                key={advertiser.id}
+                className="rounded-2xl border border-slate-800 bg-slate-900 p-5"
+              >
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-sm text-slate-400">#{index + 1}</p>
+                    <h3 className="mt-1 text-lg font-semibold">
+                      {advertiser.name}
+                    </h3>
+                  </div>
+
+                  <div className="rounded-xl bg-emerald-500/10 px-4 py-3">
+                    <p className="text-center text-xs uppercase text-emerald-300">
+                      Ads
+                    </p>
+                    <p className="text-center text-2xl font-bold text-emerald-400">
+                      {advertiser.total_ads}
+                    </p>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="mb-10">
+          <div className="mb-4">
+            <h2 className="text-2xl font-semibold">Productos ganadores</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              Por ahora estos datos son manuales; luego serán calculados desde
+              los anuncios detectados.
+            </p>
           </div>
 
           <div className="grid gap-4">
@@ -145,31 +201,6 @@ export default async function Home() {
                     </p>
                   </div>
                 </div>
-
-                <div className="mt-5 grid gap-3 sm:grid-cols-3">
-                  <div className="rounded-xl bg-slate-950 p-4">
-                    <p className="text-xs uppercase text-slate-500">Anuncios</p>
-                    <p className="mt-2 text-2xl font-semibold">
-                      {product.total_ads}
-                    </p>
-                  </div>
-
-                  <div className="rounded-xl bg-slate-950 p-4">
-                    <p className="text-xs uppercase text-slate-500">
-                      Anunciantes
-                    </p>
-                    <p className="mt-2 text-2xl font-semibold">
-                      {product.total_advertisers}
-                    </p>
-                  </div>
-
-                  <div className="rounded-xl bg-slate-950 p-4">
-                    <p className="text-xs uppercase text-slate-500">Países</p>
-                    <p className="mt-2 text-2xl font-semibold">
-                      {product.total_countries}
-                    </p>
-                  </div>
-                </div>
               </article>
             ))}
           </div>
@@ -177,7 +208,9 @@ export default async function Home() {
 
         <section>
           <div className="mb-4">
-            <h2 className="text-2xl font-semibold">Últimos anuncios detectados</h2>
+            <h2 className="text-2xl font-semibold">
+              Últimos anuncios detectados
+            </h2>
             <p className="mt-1 text-sm text-slate-400">
               Datos capturados por el worker desde Meta Ads Library.
             </p>
