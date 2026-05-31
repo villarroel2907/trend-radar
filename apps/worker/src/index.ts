@@ -4,7 +4,16 @@ import { createClient } from "@supabase/supabase-js";
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const keyword = process.env.SEARCH_KEYWORD ?? "fisioterapia";
+
+const rawKeyword =
+  process.argv.slice(2).join(" ").trim() ||
+  process.env.SEARCH_KEYWORD ||
+  "fisioterapia";
+
+const keyword = rawKeyword
+  .replace(/^--\s*/, "")
+  .trim()
+  .toLowerCase();
 
 if (!supabaseUrl || !supabaseServiceKey) {
   throw new Error("Missing Supabase environment variables");
@@ -23,9 +32,7 @@ function cleanLines(block: string): string[] {
 function extractLibraryId(lines: string[], index: number): string {
   const numericId = lines.find((line) => /^\d{6,}$/.test(line));
 
-  if (numericId) {
-    return numericId;
-  }
+  if (numericId) return numericId;
 
   const lineWithId = lines.find((line) =>
     line.includes("Identificador de la biblioteca")
@@ -33,11 +40,7 @@ function extractLibraryId(lines: string[], index: number): string {
 
   const idFromText = lineWithId?.match(/\d+/)?.[0];
 
-  if (idFromText) {
-    return idFromText;
-  }
-
-  return `unknown-${Date.now()}-${index}`;
+  return idFromText ?? `unknown-${Date.now()}-${index}`;
 }
 
 function extractAdvertiserName(lines: string[]): string {
@@ -87,14 +90,141 @@ function extractAdCopy(lines: string[], block: string): string {
       .filter((line) => !/^[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(line))
       .filter((line) => line.length >= 15);
 
-    if (candidates.length > 0) {
-      return candidates[0];
+    if (candidates.length > 0) return candidates[0];
+  }
+
+  return lines.find((line) => line.length >= 30) ?? block.slice(0, 500);
+}
+
+function extractDomainFromAdText(adText: string): string | null {
+  const match = adText.match(/Domain:\s*(.+)/);
+  return match?.[1]?.trim().toUpperCase() ?? null;
+}
+
+async function refreshAdvertisers() {
+  const { data: ads, error } = await supabase
+    .from("ads")
+    .select("advertiser_name, created_at")
+    .not("advertiser_name", "is", null);
+
+  if (error) {
+    console.error("Error loading ads for advertisers refresh:", error);
+    return;
+  }
+
+  const map = new Map<
+    string,
+    { name: string; total_ads: number; first_seen_at: string; last_seen_at: string }
+  >();
+
+  for (const ad of ads ?? []) {
+    if (!ad.advertiser_name) continue;
+
+    const current = map.get(ad.advertiser_name);
+
+    if (!current) {
+      map.set(ad.advertiser_name, {
+        name: ad.advertiser_name,
+        total_ads: 1,
+        first_seen_at: ad.created_at,
+        last_seen_at: ad.created_at,
+      });
+      continue;
+    }
+
+    current.total_ads += 1;
+
+    if (ad.created_at < current.first_seen_at) {
+      current.first_seen_at = ad.created_at;
+    }
+
+    if (ad.created_at > current.last_seen_at) {
+      current.last_seen_at = ad.created_at;
     }
   }
 
-  const fallback = lines.find((line) => line.length >= 30);
+  for (const advertiser of map.values()) {
+    await supabase.from("advertisers").upsert(
+      {
+        ...advertiser,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "name" }
+    );
+  }
 
-  return fallback ?? block.slice(0, 500);
+  console.log(`Advertisers refreshed: ${map.size}`);
+}
+
+async function refreshDomains() {
+  const { data: ads, error } = await supabase
+    .from("ads")
+    .select("ad_text, advertiser_name, created_at")
+    .like("ad_text", "%Domain:%");
+
+  if (error) {
+    console.error("Error loading ads for domains refresh:", error);
+    return;
+  }
+
+  const map = new Map<
+    string,
+    {
+      name: string;
+      total_ads: number;
+      advertisers: Set<string>;
+      first_seen_at: string;
+      last_seen_at: string;
+    }
+  >();
+
+  for (const ad of ads ?? []) {
+    const domain = extractDomainFromAdText(ad.ad_text);
+    if (!domain) continue;
+
+    const current = map.get(domain);
+
+    if (!current) {
+      map.set(domain, {
+        name: domain,
+        total_ads: 1,
+        advertisers: new Set(ad.advertiser_name ? [ad.advertiser_name] : []),
+        first_seen_at: ad.created_at,
+        last_seen_at: ad.created_at,
+      });
+      continue;
+    }
+
+    current.total_ads += 1;
+
+    if (ad.advertiser_name) {
+      current.advertisers.add(ad.advertiser_name);
+    }
+
+    if (ad.created_at < current.first_seen_at) {
+      current.first_seen_at = ad.created_at;
+    }
+
+    if (ad.created_at > current.last_seen_at) {
+      current.last_seen_at = ad.created_at;
+    }
+  }
+
+  for (const domain of map.values()) {
+    await supabase.from("domains").upsert(
+      {
+        name: domain.name,
+        total_ads: domain.total_ads,
+        total_advertisers: domain.advertisers.size,
+        first_seen_at: domain.first_seen_at,
+        last_seen_at: domain.last_seen_at,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "name" }
+    );
+  }
+
+  console.log(`Domains refreshed: ${map.size}`);
 }
 
 async function main() {
@@ -133,23 +263,16 @@ async function main() {
 
   const bodyText = await page.locator("body").innerText();
 
-  console.log("Page text length:", bodyText.length);
-
   const blocks = bodyText
     .split(/(?=Identificador de la biblioteca:|Library ID:)/g)
     .map((block) => block.trim())
     .filter((block) => {
-      const hasLibraryId =
-        block.includes("Identificador de la biblioteca:") ||
-        block.includes("Library ID:") ||
-        /^\d{6,}/.test(block);
-
       const hasAdSignal =
         block.includes("Publicidad") ||
         block.includes("Ver detalles del anuncio") ||
         block.includes("Activo");
 
-      return hasLibraryId && hasAdSignal && block.length > 100;
+      return hasAdSignal && block.length > 100;
     });
 
   console.log(`Possible ad blocks found: ${blocks.length}`);
@@ -218,9 +341,13 @@ async function main() {
     }
   }
 
-  console.log(`Finished. Saved: ${savedCount}. Skipped: ${skippedCount}.`);
-
   await browser.close();
+
+  console.log("Refreshing summary tables...");
+  await refreshAdvertisers();
+  await refreshDomains();
+
+  console.log(`Finished. Saved: ${savedCount}. Skipped: ${skippedCount}.`);
 }
 
 main().catch((error) => {

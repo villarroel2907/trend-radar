@@ -33,6 +33,15 @@ type Advertiser = {
   last_seen_at: string | null;
 };
 
+type Domain = {
+  id: string;
+  name: string;
+  total_ads: number;
+  total_advertisers: number;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+};
+
 function extractDomain(adText: string): string | null {
   const match = adText.match(/Domain:\s*(.+)/);
   return match?.[1] ?? null;
@@ -54,6 +63,7 @@ export default async function Home() {
     { data: products, error: productsError },
     { data: ads, error: adsError },
     { data: advertisers, error: advertisersError },
+    { data: domains, error: domainsError },
   ] = await Promise.all([
     supabase
       .from("products")
@@ -72,9 +82,15 @@ export default async function Home() {
       .select("*")
       .order("total_ads", { ascending: false })
       .limit(10),
+
+    supabase
+      .from("domains")
+      .select("*")
+      .order("total_ads", { ascending: false })
+      .limit(10),
   ]);
 
-  if (productsError || adsError || advertisersError) {
+  if (productsError || adsError || advertisersError || domainsError) {
     return (
       <main className="min-h-screen bg-slate-950 p-8 text-white">
         <h1 className="text-2xl font-bold">Trend Radar</h1>
@@ -82,7 +98,8 @@ export default async function Home() {
           Error cargando datos:{" "}
           {productsError?.message ??
             adsError?.message ??
-            advertisersError?.message}
+            advertisersError?.message ??
+            domainsError?.message}
         </p>
       </main>
     );
@@ -92,8 +109,10 @@ export default async function Home() {
   const totalAdvertisers = advertisers?.length ?? 0;
   const totalKeywords = new Set(ads?.map((ad) => ad.keyword).filter(Boolean))
     .size;
+  const totalDomains = domains?.length ?? 0;
 
   const topAdvertisers = advertisers as Advertiser[] | null;
+  const topDomains = domains as Domain[] | null;
 
   return (
     <main className="min-h-screen bg-slate-950 p-6 text-white">
@@ -109,7 +128,7 @@ export default async function Home() {
           </p>
         </header>
 
-        <section className="mb-8 grid gap-4 md:grid-cols-3">
+        <section className="mb-8 grid gap-4 md:grid-cols-4">
           <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
             <p className="text-sm text-slate-400">Últimos anuncios cargados</p>
             <p className="mt-2 text-3xl font-bold">{totalAds}</p>
@@ -121,44 +140,90 @@ export default async function Home() {
           </div>
 
           <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+            <p className="text-sm text-slate-400">Dominios detectados</p>
+            <p className="mt-2 text-3xl font-bold">{totalDomains}</p>
+          </div>
+
+          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
             <p className="text-sm text-slate-400">Keywords rastreadas</p>
             <p className="mt-2 text-3xl font-bold">{totalKeywords}</p>
           </div>
         </section>
 
-        <section className="mb-10">
-          <div className="mb-4">
-            <h2 className="text-2xl font-semibold">Top Advertisers</h2>
-            <p className="mt-1 text-sm text-slate-400">
-              Anunciantes con más anuncios detectados.
-            </p>
+        <section className="mb-10 grid gap-6 lg:grid-cols-2">
+          <div>
+            <div className="mb-4">
+              <h2 className="text-2xl font-semibold">Top Advertisers</h2>
+              <p className="mt-1 text-sm text-slate-400">
+                Anunciantes con más anuncios detectados.
+              </p>
+            </div>
+
+            <div className="grid gap-4">
+              {topAdvertisers?.map((advertiser, index) => (
+                <article
+                  key={advertiser.id}
+                  className="rounded-2xl border border-slate-800 bg-slate-900 p-5"
+                >
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-sm text-slate-400">#{index + 1}</p>
+                      <h3 className="mt-1 text-lg font-semibold">
+                        {advertiser.name}
+                      </h3>
+                    </div>
+
+                    <div className="rounded-xl bg-emerald-500/10 px-4 py-3">
+                      <p className="text-center text-xs uppercase text-emerald-300">
+                        Ads
+                      </p>
+                      <p className="text-center text-2xl font-bold text-emerald-400">
+                        {advertiser.total_ads}
+                      </p>
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-2">
-            {topAdvertisers?.map((advertiser, index) => (
-              <article
-                key={advertiser.id}
-                className="rounded-2xl border border-slate-800 bg-slate-900 p-5"
-              >
-                <div className="flex items-center justify-between gap-4">
-                  <div>
-                    <p className="text-sm text-slate-400">#{index + 1}</p>
-                    <h3 className="mt-1 text-lg font-semibold">
-                      {advertiser.name}
-                    </h3>
-                  </div>
+          <div>
+            <div className="mb-4">
+              <h2 className="text-2xl font-semibold">Top Domains</h2>
+              <p className="mt-1 text-sm text-slate-400">
+                Dominios más repetidos en los anuncios detectados.
+              </p>
+            </div>
 
-                  <div className="rounded-xl bg-emerald-500/10 px-4 py-3">
-                    <p className="text-center text-xs uppercase text-emerald-300">
-                      Ads
-                    </p>
-                    <p className="text-center text-2xl font-bold text-emerald-400">
-                      {advertiser.total_ads}
-                    </p>
+            <div className="grid gap-4">
+              {topDomains?.map((domain, index) => (
+                <article
+                  key={domain.id}
+                  className="rounded-2xl border border-slate-800 bg-slate-900 p-5"
+                >
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-sm text-slate-400">#{index + 1}</p>
+                      <h3 className="mt-1 break-all text-lg font-semibold">
+                        {domain.name}
+                      </h3>
+                      <p className="mt-2 text-sm text-slate-500">
+                        {domain.total_advertisers} anunciante(s)
+                      </p>
+                    </div>
+
+                    <div className="rounded-xl bg-blue-500/10 px-4 py-3">
+                      <p className="text-center text-xs uppercase text-blue-300">
+                        Ads
+                      </p>
+                      <p className="text-center text-2xl font-bold text-blue-400">
+                        {domain.total_ads}
+                      </p>
+                    </div>
                   </div>
-                </div>
-              </article>
-            ))}
+                </article>
+              ))}
+            </div>
           </div>
         </section>
 
